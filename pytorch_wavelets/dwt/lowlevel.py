@@ -4,7 +4,7 @@ import numpy as np
 from torch.autograd import Function
 from pytorch_wavelets.utils import reflect
 import pywt
-
+import lowlevel3Dutils
 
 def roll(x, n, dim, make_even=False):
     if n < 0:
@@ -309,6 +309,68 @@ def int_to_mode(mode):
         raise ValueError("Unkown pad type: {}".format(mode))
 
 
+class AFB3D(Function):
+    """ Does a single level 3d wavelet decomposition of an input. Does separate
+    row, column and depth filtering by three calls to
+    :py:func:`pytorch_wavelets.dwt.lowlevel.afb1d`
+
+    Needs to have the tensors in the right form. Because this function defines
+    its own backward pass, saves on memory by not having to save the input
+    tensors.
+
+    Inputs:
+        x (torch.Tensor): Input to decompose
+        h0_row: row lowpass
+        h1_row: row highpass
+        h0_col: col lowpass
+        h1_col: col highpass
+        h0_dep: dep lowpass
+        h1_dep: dep highpass
+        mode (int): use mode_to_int to get the int code here
+
+    We encode the mode as an integer rather than a string as gradcheck causes an
+    error when a string is provided.
+
+    Returns:
+        y: Tensor of shape (N, C*8, H, W, D)
+    """
+    @staticmethod
+    def forward(ctx, x, h0_row, h1_row, h0_col, h1_col, h0_dep, h1_dep, mode):
+        ctx.save_for_backward(h0_row, h1_row, h0_col, h1_col, h0_dep, h1_dep)
+        ctx.shape = x.shape[-3:]
+        mode = int_to_mode(mode)
+        ctx.mode = mode
+        lohi = lowlevel3Dutils.afb1d3d(x, h0_dep, h1_dep, mode=mode, dim=4)
+        lohilohi = lowlevel3Dutils.afb1d3d(lohi, h0_row, h1_row, mode=mode, dim=3)
+        y = lowlevel3Dutils.afb1d3d(lohilohi, h0_col, h1_col, mode=mode, dim=2)
+        s = y.shape
+        y = y.reshape(s[0], -1, 8, s[-3], s[-2], s[-1])
+        low = y[:,:,0].contiguous()
+        highs = y[:,:,1:].contiguous()
+        return low, highs
+
+    @staticmethod
+    def backward(ctx, low, highs):
+        dx = None
+        if ctx.needs_input_grad[0]:
+            mode = ctx.mode
+            h0_row, h1_row, h0_col, h1_col, h0_dep, h1_dep = ctx.saved_tensors
+            llh, lhl, lhh, hll, hlh, hhl, hhh = torch.unbind(highs, dim=2)
+
+            ll = lowlevel3Dutils.sfb1d3d(low, llh, h0_col, h1_col, mode=mode, dim=2)
+            lh = lowlevel3Dutils.sfb1d3d(lhl, lhh, h0_col, h1_col, mode=mode, dim=2)
+            hl = lowlevel3Dutils.sfb1d3d(hll, hlh, h0_col, h1_col, mode=mode, dim=2)
+            hh = lowlevel3Dutils.sfb1d3d(hhl, hhh, h0_col, h1_col, mode=mode, dim=2)
+            lo = lowlevel3Dutils.sfb1d3d(ll, lh, h0_row, h1_row, mode=mode, dim=3)
+            hi = lowlevel3Dutils.sfb1d3d(hl, hh, h0_row, h1_row, mode=mode, dim=3)
+            dx = lowlevel3Dutils.sfb1d3d(lo, hi, h0_dep, h1_dep, mode=mode, dim=4)
+
+            min_c = ctx.shape[-3] if dx.shape[-3] > ctx.shape[-3] else dx.shape[-3]
+            min_r = ctx.shape[-2] if dx.shape[-2] > ctx.shape[-2] else dx.shape[-2]
+            min_d = ctx.shape[-1] if dx.shape[-1] > ctx.shape[-1] else dx.shape[-1]
+            dx = dx[:, :, :min_c, :min_r, :min_d]
+        return dx, None, None, None, None, None
+
 class AFB2D(Function):
     """ Does a single level 2d wavelet decomposition of an input. Does separate
     row and column filtering by two calls to
@@ -340,8 +402,10 @@ class AFB2D(Function):
         ctx.mode = mode
         lohi = afb1d(x, h0_row, h1_row, mode=mode, dim=3)
         y = afb1d(lohi, h0_col, h1_col, mode=mode, dim=2)
+        print(y.shape)
         s = y.shape
         y = y.reshape(s[0], -1, 4, s[-2], s[-1])
+        print(y.shape)
         low = y[:,:,0].contiguous()
         highs = y[:,:,1:].contiguous()
         return low, highs
@@ -643,6 +707,68 @@ def sfb2d(ll, lh, hl, hh, filts, mode='zero'):
 
     return y
 
+class SFB3D(Function):
+    """ Does a single level 3d wavelet decomposition of an input. Does separate
+    row and column filtering by two calls to
+    :py:func:`pytorch_wavelets.dwt.lowlevel.afb1d`
+
+    Needs to have the tensors in the right form. Because this function defines
+    its own backward pass, saves on memory by not having to save the input
+    tensors.
+
+    Inputs:
+        x (torch.Tensor): Input to decompose
+        g0_row: row lowpass
+        g1_row: row highpass
+        g0_col: col lowpass
+        g1_col: col highpass
+        g0_dep: dep lowpass
+        g1_dep: dep highpass
+        mode (int): use mode_to_int to get the int code here
+
+    We encode the mode as an integer rather than a string as gradcheck causes an
+    error when a string is provided.
+
+    Returns:
+        y: Tensor of shape (N, C, H, W, D)
+    """
+    @staticmethod
+    def forward(ctx, low, highs, g0_row, g1_row, g0_col, g1_col, g0_dep, g1_dep, mode):
+        mode = int_to_mode(mode)
+        ctx.mode = mode
+        ctx.save_for_backward(g0_row, g1_row, g0_col, g1_col, g0_dep, g1_dep)
+
+        llh, lhl, lhh, hll, hlh, hhl, hhh = torch.unbind(highs, dim=2)
+        #lh, hl, hh = torch.unbind(highs, dim=2)
+        #lh = torch.unbind(highs, dim=2)
+        
+        ll = lowlevel3Dutils.sfb1d3d(low, llh, g0_col, g1_col, mode=mode, dim=2)
+        lh = lowlevel3Dutils.sfb1d3d(lhl, lhh, g0_col, g1_col, mode=mode, dim=2)
+        hl = lowlevel3Dutils.sfb1d3d(hll, hlh, g0_col, g1_col, mode=mode, dim=2)
+        hh = lowlevel3Dutils.sfb1d3d(hhl, hhh, g0_col, g1_col, mode=mode, dim=2)
+
+        lo = lowlevel3Dutils.sfb1d3d(ll, lh, g0_row, g1_row, mode=mode, dim=3)
+        hi = lowlevel3Dutils.sfb1d3d(hl, hh, g0_row, g1_row, mode=mode, dim=3)
+
+        y = lowlevel3Dutils.sfb1d3d(lo, hi, g0_dep, g1_dep, mode=mode, dim=4)
+        return y
+
+    @staticmethod
+    def backward(ctx, dy):
+        dlow, dhigh = None, None
+        if ctx.needs_input_grad[0]:
+            mode = ctx.mode
+            g0_row, g1_row, g0_col, g1_col, g0_dep, g1_dep = ctx.saved_tensors
+
+            dx = lowlevel3Dutils.afb1d3d(dy, g0_dep, g1_dep, mode=mode, dim=4)
+            dx = lowlevel3Dutils.afb1d3d(dx, g0_row, g1_row, mode=mode, dim=3)
+            dx = lowlevel3Dutils.afb1d3d(dx, g0_col, g1_col, mode=mode, dim=2)
+
+            s = dx.shape
+            dx = dx.reshape(s[0], -1, 8, s[-3] ,s[-2], s[-1])
+            dlow = dx[:,:,0].contiguous()
+            dhigh = dx[:,:,1:].contiguous()
+        return dlow, dhigh, None, None, None, None, None
 
 class SFB2D(Function):
     """ Does a single level 2d wavelet decomposition of an input. Does separate
@@ -867,6 +993,49 @@ def prep_filt_sfb2d_nonsep(g0_col, g1_col, g0_row=None, g1_row=None,
     return filts
 
 
+def prep_filt_sfb3d(g0_col, g1_col, g0_row=None, g1_row=None, g0_dep=None, g1_dep=None, device=None):
+    """
+    Prepares the filters to be of the right form for the sfb2d function.  In
+    particular, makes the tensors the right shape. It does not mirror image them
+    as as sfb2d uses conv2d_transpose which acts like normal convolution.
+
+    Inputs:
+        g0_col (array-like): low pass column filter bank
+        g1_col (array-like): high pass column filter bank
+        g0_row (array-like): low pass row filter bank. If none, will assume the
+            same as column filter
+        g1_row (array-like): high pass row filter bank. If none, will assume the
+            same as column filter
+        g0_dep (array-like): low pass depth filter bank. If none, will assume the
+            same as column filter
+        g1_dep (array-like): high pass depth filter bank. If none, will assume the
+            same as column filter
+        device: which device to put the tensors on to
+
+    Returns:
+        (g0_col, g1_col, g0_row, g1_row, g0_dep, g1_dep)
+    """
+    g0_col, g1_col = prep_filt_sfb1d(g0_col, g1_col, device)
+    if g0_row is None:
+        g0_row, g1_row = g0_col, g1_col
+    else:
+        g0_row, g1_row = prep_filt_sfb1d(g0_row, g1_row, device)
+
+    if g0_dep is None:
+        g0_dep, g1_dep = g0_col, g1_col
+    else:
+        g0_dep, g1_dep = prep_filt_sfb1d(g0_dep, g1_dep, device)
+
+    g0_col = g0_col.reshape((1, 1, -1,  1,  1))
+    g1_col = g1_col.reshape((1, 1, -1,  1,  1))
+    g0_row = g0_row.reshape((1, 1,  1, -1,  1))
+    g1_row = g1_row.reshape((1, 1,  1, -1,  1))
+    g0_dep = g0_dep.reshape((1, 1,  1,  1, -1))
+    g1_dep = g1_dep.reshape((1, 1,  1,  1, -1))
+
+    return g0_col, g1_col, g0_row, g1_row, g0_dep, g1_dep
+
+
 def prep_filt_sfb2d(g0_col, g1_col, g0_row=None, g1_row=None, device=None):
     """
     Prepares the filters to be of the right form for the sfb2d function.  In
@@ -922,6 +1091,48 @@ def prep_filt_sfb1d(g0, g1, device=None):
     return g0, g1
 
 
+def prep_filt_afb3d(h0_col, h1_col, h0_row=None, h1_row=None, h0_dep=None, h1_dep=None, device=None):
+    """
+    Prepares the filters to be of the right form for the afb3d function.  In
+    particular, makes the tensors the right shape. It takes mirror images of
+    them as as afb2d uses conv2d which acts like normal correlation.
+
+    Inputs:
+        h0_col (array-like): low pass column filter bank
+        h1_col (array-like): high pass column filter bank
+        h0_row (array-like): low pass row filter bank. If none, will assume the
+            same as column filter
+        h1_row (array-like): high pass row filter bank. If none, will assume the
+            same as column filter
+        h0_dep (array-like): low pass depth filter bank. If none, will assume the
+            same as column filter
+        h1_dep (array-like): high pass depth filter bank. If none, will assume the
+            same as column filter
+        device: which device to put the tensors on to
+
+    Returns:
+        (h0_col, h1_col, h0_row, h1_row, h0_dep, h1_dep)
+    """
+    h0_col, h1_col = prep_filt_afb1d(h0_col, h1_col, device)
+    if h0_row is None:
+        h0_row, h1_row = h0_col, h1_col
+    else:
+        h0_row, h1_row = prep_filt_afb1d(h0_row, h1_row, device)
+
+    if h0_dep is None:
+        h0_dep, h1_dep = h0_col, h1_col
+    else:
+        h0_dep, h1_dep = prep_filt_afb1d(h0_dep, h1_dep, device)
+
+    h0_col = h0_col.reshape((1, 1, -1,  1,  1))
+    h1_col = h1_col.reshape((1, 1, -1,  1,  1))
+    h0_row = h0_row.reshape((1, 1,  1, -1,  1))
+    h1_row = h1_row.reshape((1, 1,  1, -1,  1))
+    h0_dep = h0_dep.reshape((1, 1,  1,  1, -1))
+    h1_dep = h1_dep.reshape((1, 1,  1,  1, -1))
+    return h0_col, h1_col, h0_row, h1_row, h0_dep, h1_dep
+
+
 def prep_filt_afb2d(h0_col, h1_col, h0_row=None, h1_row=None, device=None):
     """
     Prepares the filters to be of the right form for the afb2d function.  In
@@ -952,7 +1163,6 @@ def prep_filt_afb2d(h0_col, h1_col, h0_row=None, h1_row=None, device=None):
     h1_row = h1_row.reshape((1, 1, 1, -1))
     return h0_col, h1_col, h0_row, h1_row
 
-
 def prep_filt_afb1d(h0, h1, device=None):
     """
     Prepares the filters to be of the right form for the afb2d function.  In
@@ -973,3 +1183,7 @@ def prep_filt_afb1d(h0, h1, device=None):
     h0 = torch.tensor(h0, device=device, dtype=t).reshape((1, 1, -1))
     h1 = torch.tensor(h1, device=device, dtype=t).reshape((1, 1, -1))
     return h0, h1
+
+
+
+
