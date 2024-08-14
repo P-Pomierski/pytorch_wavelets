@@ -210,10 +210,3 @@ class SWTForward(nn.Module):
             ll = y[:,:,0]
 
         return coeffs
-
-x = torch.randn(1, 1, 128, 128)
-xfd = DWTForward(wave='haar')
-l, h = xfd(x)
-print(l.shape)
-print(len(h))
-print(h[0].shape)
