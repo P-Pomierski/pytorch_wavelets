@@ -370,7 +370,7 @@ class AFB3D(Function):
             min_r = ctx.shape[-2] if dx.shape[-2] > ctx.shape[-2] else dx.shape[-2]
             min_d = ctx.shape[-1] if dx.shape[-1] > ctx.shape[-1] else dx.shape[-1]
             dx = dx[:, :, :min_c, :min_r, :min_d]
-        return dx, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None
 
 class AFB2D(Function):
     """ Does a single level 2d wavelet decomposition of an input. Does separate
@@ -769,7 +769,7 @@ class SFB3D(Function):
             dx = dx.reshape(s[0], -1, 8, s[-3] ,s[-2], s[-1])
             dlow = dx[:,:,0].contiguous()
             dhigh = dx[:,:,1:].contiguous()
-        return dlow, dhigh, None, None, None, None, None
+        return dlow, dhigh, None, None, None, None, None, None, None
 
 class SFB2D(Function):
     """ Does a single level 2d wavelet decomposition of an input. Does separate
