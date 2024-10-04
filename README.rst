@@ -1,4 +1,4 @@
-2D Wavelet Transforms in Pytorch
+1D 2D and 3D Wavelet Transforms in Pytorch (fork)
 ================================
 
 |build-status| |docs| |doi|
@@ -32,6 +32,31 @@ to the Morlet based scatternet in `KymatIO`__, but is roughly 10 times faster.
 If you use this repo, please cite my PhD thesis, chapter 3: https://doi.org/10.17863/CAM.53748.
 
 __ https://github.com/kymatio/kymatio
+
+Forked version added DWT3DForward and DWT3DInverse
+
+New in version 1.4.0
+~~~~~~~~~~~~~~~~~~~~
+
+- Added 3D DWT support
+
+.. code:: python
+
+    import torch
+    from pytorch_wavelets import DWT1DForward, DWT1DInverse  # or simply DWT1D, IDWT1D
+    dwt = DWT3DForward(wave='db6', J=3)
+    X = torch.randn(10, 5, 100, 100, 100)
+    yl, yh = dwt(X)
+    print(yl.shape)
+    >>> torch.Size([10, 5, 22, 22, 22])
+    print(yh[0].shape)
+    >>> torch.Size([10, 5, 7, 55, 55, 55])
+    print(yh[1].shape)
+    >>> torch.Size([10, 5, 7, 33, 33, 33])
+    print(yh[2].shape)
+    >>> torch.Size([10, 5, 7, 22, 22, 22])
+    idwt = DWT1DInverse(wave='db6')
+    x = idwt((yl, yh))
 
 New in version 1.3.0
 ~~~~~~~~~~~~~~~~~~~~
