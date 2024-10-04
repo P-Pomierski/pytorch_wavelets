@@ -159,23 +159,3 @@ class DWT3DInverse(nn.Module):
             ll = lowlevel.SFB3D.apply(
                 ll, h, self.g0_row, self.g1_row, self.g0_col, self.g1_col, self.g0_dep, self.g1_dep, mode)
         return ll
-
-
-# x = torch.randn(1, 1, 256, 256, 256)
-# xfd = DWT3DForward(J=2, wave='haar')
-# l, h = xfd(x)
-# packet = pywt.WaveletPacketND(data=x.squeeze(), wavelet='haar', mode='zero')
-# idwt = DWT3DInverse(wave='haar')
-# x_reconstructed = idwt((l, h))
-
-# print(np.allclose(x.numpy(), x_reconstructed.numpy(), atol=1e-5))
-
-# print(np.allclose(   l.squeeze().numpy(),    packet['aaa'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[0].numpy(), packet['daa'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[1].numpy(), packet['ada'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[2].numpy(), packet['dda'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[3].numpy(), packet['aad'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[4].numpy(), packet['dad'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[5].numpy(), packet['add'].data, atol=1e-5))
-# print(np.allclose(h[0].squeeze()[6].numpy(), packet['ddd'].data, atol=1e-5))
-
